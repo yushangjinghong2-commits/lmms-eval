@@ -1,0 +1,11 @@
+group: mmsi_bench
+task:
+  - mmsi_msr
+  - mmsi_attribute_appr
+  - mmsi_attribute_meas
+  - mmsi_motion_cam
+  - mmsi_motion_obj
+
+metadata:
+  version: 0.0
+  description: "MMSI-Bench: Multi-Modal Spatial Intelligence Benchmark - Standard evaluation across all categories"

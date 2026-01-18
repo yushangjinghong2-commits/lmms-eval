@@ -1,0 +1,11 @@
+group: mmsi_bench_visual_cot
+task:
+  - mmsi_msr_visual_cot
+  - mmsi_attribute_appr_visual_cot
+  - mmsi_attribute_meas_visual_cot
+  - mmsi_motion_cam_visual_cot
+  - mmsi_motion_obj_visual_cot
+
+metadata:
+  version: 0.0
+  description: "MMSI-Bench: Multi-Modal Spatial Intelligence Benchmark - Visual Chain-of-Thought evaluation with two-stage inference"
