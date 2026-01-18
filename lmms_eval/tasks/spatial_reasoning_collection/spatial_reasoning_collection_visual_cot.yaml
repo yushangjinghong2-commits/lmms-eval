@@ -1,0 +1,11 @@
+group: spatial_reasoning_collection_visual_cot
+task:
+  - illusionbench_arshia_test_visual_cot
+  - mmsi_attribute_appr_visual_cot
+  - mmsi_attribute_meas_visual_cot
+  - mmsi_motion_cam_visual_cot
+  - mmsi_motion_obj_visual_cot
+  - mmsi_msr_visual_cot
+  - VisualPuzzles_visual_cot
+  - geometry3k_visual_cot
+  - auxsolidmath_easy_visual_cot

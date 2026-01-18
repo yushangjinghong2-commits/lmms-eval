@@ -84,9 +84,15 @@ AVAILABLE_SIMPLE_MODELS = {
     "egogpt": "EgoGPT",
     "internvideo2_5": "InternVideo2_5",
     "videochat_flash": "VideoChat_Flash",
+    "javisgpt": "JavisGPT",
+    "javisgpt_visual_cot": "JavisGPTVisualCoT",
     "whisper": "Whisper",
     "whisper_vllm": "WhisperVllm",
     "vora": "VoRA",
+    "unipic2": "UniPic2",
+    "unipic2_visual_cot": "UniPic2VisualCoT",
+    "onecat": "OneCAT",
+    "onecat_visual_cot": "OneCATVisualCoT",
 }
 
 AVAILABLE_CHAT_TEMPLATE_MODELS = {

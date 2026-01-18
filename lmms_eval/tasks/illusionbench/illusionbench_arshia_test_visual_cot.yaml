@@ -1,0 +1,8 @@
+group: illusionbench_arshia_test_visual_cot
+task:
+  - illusionbench_arshia_icon_shape_visual_cot
+  - illusionbench_arshia_icon_scene_visual_cot
+  - illusionbench_arshia_logo_shape_visual_cot
+  - illusionbench_arshia_logo_scene_visual_cot
+  - illusionbench_arshia_in_shape_visual_cot
+  - illusionbench_arshia_in_scene_visual_cot

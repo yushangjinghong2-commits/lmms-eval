@@ -1,0 +1,11 @@
+group: spatial_reasoning_collection
+task:
+  - illusionbench_arshia_test
+  - mmsi_attribute_appr
+  - mmsi_attribute_meas
+  - mmsi_motion_cam
+  - mmsi_motion_obj
+  - mmsi_msr
+  - VisualPuzzles
+  - geometry3k
+  - auxsolidmath_easy
