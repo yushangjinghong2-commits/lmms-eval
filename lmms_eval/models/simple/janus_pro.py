@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -14,75 +15,31 @@ from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
 
-
-# Add UniPic repository to Python path
-# Expected: lmms-eval/UniPic/ directory at project root
+# Add Janus repository to Python path
 wd = Path(__file__).parent.parent.parent.parent.resolve()
-unipic_path = os.path.join(str(wd), "UniPic-2")
-if os.path.exists(unipic_path):
-    sys.path.insert(0, unipic_path)
-    eval_logger.info(f"Added UniPic-2 path to sys.path: {unipic_path}")
-else:
-    # Try alternative path
-    unipic_path_alt = os.path.join(str(wd), "UniPic", "UniPic-2")
-    if os.path.exists(unipic_path_alt):
-        sys.path.insert(0, unipic_path_alt)
-        eval_logger.info(f"Added UniPic-2 path to sys.path: {unipic_path_alt}")
-    else:
-        eval_logger.warning(
-            f"UniPic-2 repository not found at {unipic_path}. "
-            f"Please clone it: cd {wd} && git clone https://github.com/SkyworkAI/UniPic.git"
-        )
+janus_path = os.path.join(str(wd), "Janus")
+if os.path.exists(janus_path):
+    sys.path.insert(0, janus_path)
+    eval_logger.info(f"Added Janus path to sys.path: {janus_path}")
 
 
-def fix_longer_edge(image: Image.Image, image_size: int = 512) -> Image.Image:
-    """Resize image so the longer edge equals image_size while maintaining aspect ratio."""
-    width, height = image.size
-    if width > height:
-        new_width = image_size
-        new_height = int(height * image_size / width)
-    else:
-        new_height = image_size
-        new_width = int(width * image_size / height)
-    return image.resize((new_width, new_height), Image.LANCZOS)
-
-
-@register_model("unipic2")
-class UniPic2(lmms):
+@register_model("janus_pro")
+class JanusPro(lmms):
     """
-    UniPic2-Metaquery Model
-    https://huggingface.co/Skywork/UniPic2-Metaquery-9B
-
-    UniPic2 is a unified multimodal model built on Qwen2.5-VL-Instruct and SD3.5-Medium.
-    It supports image understanding, text-to-image generation, and image editing.
-
-    This implementation focuses on image understanding for evaluation tasks.
-
-    Example usage:
-        python -m lmms_eval --model unipic2 \
-            --model_args pretrained=../models/UniPic2-Metaquery-9B,lmm_model=Qwen/Qwen2.5-VL-7B-Instruct \
-            --tasks mme,mmmu_val --batch_size 1 --device cuda:0
-
-    Prerequisites:
-        1. Clone UniPic repository: git clone https://github.com/SkyworkAI/UniPic.git
-        2. Install requirements: pip install -r UniPic-2/requirements.txt
-        3. Download local model to ../models/UniPic2-Metaquery-9B
+    Janus-Pro: Unified multimodal understanding and generation model.
+    https://huggingface.co/deepseek-ai/Janus-Pro-7B
     """
 
     def __init__(
         self,
-        pretrained: str = "../models/UniPic2-Metaquery-9B",
-        lmm_model: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+        pretrained: str = "../models/Janus-Pro-7B",
         device: str = "cuda",
         dtype: Optional[Union[str, torch.dtype]] = "bfloat16",
         batch_size: int = 1,
         trust_remote_code: Optional[bool] = True,
         use_cache: bool = True,
-        max_new_tokens: int = 1024,
-        attn_implementation: str = "flash_attention_2",
-        image_size: int = 512,
-        system_prompt: Optional[str] = "You are a helpful assistant.",
-        remove_system_prompt: bool = False,
+        max_new_tokens: int = 4096,
+        attn_implementation: Optional[str] = None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -90,12 +47,9 @@ class UniPic2(lmms):
         assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
 
         self.pretrained = pretrained
-        self.lmm_model = lmm_model
-        self.image_size = image_size
         self.max_new_tokens = max_new_tokens
         self.use_cache = use_cache
-        self.system_prompt = system_prompt
-        self.remove_system_prompt = remove_system_prompt
+        self.trust_remote_code = trust_remote_code
 
         # Setup accelerator
         accelerator = Accelerator()
@@ -114,12 +68,12 @@ class UniPic2(lmms):
         else:
             self._dtype = torch.bfloat16
 
-        # Load model components
-        eval_logger.info(f"Loading UniPic2 model from {pretrained}")
-        self._load_model(pretrained, lmm_model, attn_implementation, trust_remote_code)
+        # Load model
+        eval_logger.info(f"Loading Janus-Pro model from {pretrained}")
+        self._load_model(pretrained, attn_implementation)
 
         self.batch_size_per_gpu = int(batch_size)
-        assert self.batch_size_per_gpu == 1, "batch_size > 1 not supported for UniPic2"
+        assert self.batch_size_per_gpu == 1, "batch_size > 1 not supported for Janus-Pro"
 
         # Setup distributed training
         if accelerator.num_processes > 1:
@@ -149,51 +103,45 @@ class UniPic2(lmms):
             self._rank = 0
             self._world_size = 1
 
-        eval_logger.info("UniPic2 model initialized successfully")
+        eval_logger.info("Janus-Pro model initialized successfully")
 
-    def _load_model(
-        self, pretrained: str, lmm_model: str, attn_implementation: str, trust_remote_code: bool
-    ):
-        """Load UniPic2 model components."""
+    def _load_model(self, pretrained: str, attn_implementation: Optional[str]):
+        """Load Janus-Pro model and processor."""
         try:
-            from transformers import (
-                Qwen2_5_VLForConditionalGeneration,
-                Qwen2_5_VLProcessor,
+            from transformers import AutoModelForCausalLM
+            from janus.models import MultiModalityCausalLM, VLChatProcessor
+            from janus.utils.io import load_pil_images
+            
+            eval_logger.info("Using Janus library for model loading")
+            
+            # Load processor
+            self._processor = VLChatProcessor.from_pretrained(pretrained)
+            self._tokenizer = self._processor.tokenizer
+            
+            # Load model
+            eval_logger.info(f"Loading Janus-Pro model from {pretrained}")
+            
+            # Set environment variable to bypass torch.load security check for local models
+            import os
+            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+            
+            self._model = AutoModelForCausalLM.from_pretrained(
+                pretrained,
+                trust_remote_code=True,
+                torch_dtype=self._dtype,
             )
+            self._model = self._model.to(self._device).eval()
+            self._config = self._model.config
+            
+            eval_logger.info("Janus-Pro model loaded successfully")
+            
         except ImportError as e:
             raise ImportError(
-                f"Failed to import transformers. Please install it: pip install transformers>=4.40.0\n"
+                f"Failed to import Janus library. Please install it:\n"
+                f"  cd lmms-eval && git clone https://github.com/deepseek-ai/Janus.git\n"
                 f"Error: {e}"
             )
-
-        # For understanding tasks, we primarily use Qwen2.5-VL
-        # Load the LMM (Language-Multimodal Model) component
-        eval_logger.info(f"Loading Qwen2.5-VL model from {lmm_model}...")
-
-        self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            lmm_model,
-            torch_dtype=self._dtype,
-            attn_implementation=attn_implementation,
-            trust_remote_code=trust_remote_code,
-            device_map=self._device,
-        )
-
-        self._processor = Qwen2_5_VLProcessor.from_pretrained(
-            lmm_model,
-            trust_remote_code=trust_remote_code,
-        )
-
-        # Modify chat template as per UniPic2 requirements (optional)
-        # Note: Removing system prompt may cause different results compared to standard Qwen2.5-VL
-        if self.remove_system_prompt and self._processor.chat_template:
-            self._processor.chat_template = self._processor.chat_template.replace(
-                "{% if loop.first and message['role'] != 'system' %}"
-                "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n{% endif %}",
-                "",
-            )
-
-        self._tokenizer = self._processor.tokenizer
-        self._config = self._model.config
+            
 
     @property
     def config(self):
@@ -252,8 +200,8 @@ class UniPic2(lmms):
         return new_list
 
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
-        """Compute log-likelihood (not implemented for UniPic2)."""
-        raise NotImplementedError("Loglikelihood not implemented for UniPic2")
+        """Compute log-likelihood (not implemented for Janus-Pro)."""
+        raise NotImplementedError("Loglikelihood not implemented for Janus-Pro")
 
     def generate_until(self, requests: List[Instance]) -> List[str]:
         """Generate text until stopping criteria are met."""
@@ -310,6 +258,8 @@ class UniPic2(lmms):
             for visual in visuals:
                 if isinstance(visual, str):
                     visual = Image.open(visual).convert("RGB")
+                elif isinstance(visual, Image.Image):
+                    visual = visual.convert("RGB")
                 elif isinstance(visual, dict):
                     # Handle dict format - common in HuggingFace datasets
                     if "bytes" in visual:
@@ -327,46 +277,11 @@ class UniPic2(lmms):
                             continue
                     else:
                         continue
-                elif isinstance(visual, Image.Image):
-                    visual = visual.convert("RGB")
                 elif hasattr(visual, "convert"):
                     visual = visual.convert("RGB")
                 else:
                     continue
-                # Optionally resize image
-                visual = fix_longer_edge(visual, self.image_size)
                 images.append(visual)
-
-            # Build conversation format for Qwen2.5-VL
-            content = []
-            for img in images:
-                content.append({"type": "image", "image": img})
-            content.append({"type": "text", "text": context})
-
-            messages = [{"role": "user", "content": content}]
-
-            # Apply chat template
-            text = self._processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-
-            # Process inputs
-            if images:
-                inputs = self._processor(
-                    text=[text],
-                    images=images,
-                    videos=None,
-                    padding=True,
-                    return_tensors="pt",
-                ).to(self._device)
-            else:
-                inputs = self._processor(
-                    text=[text],
-                    images=None,
-                    videos=None,
-                    padding=True,
-                    return_tensors="pt",
-                ).to(self._device)
 
             # Set generation parameters
             max_new_tokens = gen_kwargs.get("max_new_tokens", self.max_new_tokens)
@@ -374,35 +289,23 @@ class UniPic2(lmms):
             top_p = gen_kwargs.get("top_p", None)
             num_beams = gen_kwargs.get("num_beams", 1)
 
-            # Prepare generation kwargs
-            generate_kwargs = {
-                "max_new_tokens": max_new_tokens,
-                "use_cache": self.use_cache,
-            }
-
-            # Add sampling parameters if temperature > 0
-            if temperature > 0:
-                generate_kwargs["do_sample"] = True
-                generate_kwargs["temperature"] = temperature
-                if top_p is not None:
-                    generate_kwargs["top_p"] = top_p
-            else:
-                generate_kwargs["do_sample"] = False
-
-            if num_beams > 1:
-                generate_kwargs["num_beams"] = num_beams
-
-            # Generate response
-            with torch.no_grad():
-                outputs = self.model.generate(**inputs, **generate_kwargs)
-
-            # Decode response - only the generated part
-            input_len = inputs["input_ids"].shape[1]
-            generated_ids = outputs[0][input_len:]
-            response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            # Generate response using Janus-Pro
+            try:
+                response = self._generate_response(
+                    context=context,
+                    images=images,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    num_beams=num_beams,
+                )
+            except Exception as e:
+                eval_logger.error(f"Generation error: {e}")
+                import traceback
+                eval_logger.error(traceback.format_exc())
+                response = ""
 
             # Clean up to free memory
-            del outputs, inputs
             torch.cuda.empty_cache()
 
             res.append(response)
@@ -415,6 +318,90 @@ class UniPic2(lmms):
         res = re_ords.get_original(res)
         pbar.close()
         return res
+
+    def _generate_response(
+        self,
+        context: str,
+        images: List[Image.Image],
+        max_new_tokens: int,
+        temperature: float,
+        top_p: Optional[float],
+        num_beams: int,
+    ) -> str:
+        """Generate response using Janus-Pro model with debug logs."""
+        t0 = time.time()
+        
+        # 1. FIX: Generate dynamic placeholders for N images
+        if images:
+            # Create one placeholder per image
+            image_placeholders = "<image_placeholder>\n" * len(images)
+            user_content = image_placeholders + context
+        else:
+            user_content = context
+            
+        # Build conversation format
+        conversation = [
+            {
+                "role": "User",
+                "content": user_content,
+                "images": images if images else [],
+            },
+            {"role": "Assistant", "content": ""},
+        ]
+
+        # 2. FIX: Use passed PIL images directly (don't call load_pil_images)
+        pil_images = images
+        
+        # DEBUG LOG: Print when processor starts
+        # print(f"[Debug] Processing {len(images)} images and prompt...")
+        
+        prepare_inputs = self._processor(
+            conversations=conversation, 
+            images=pil_images, 
+            force_batchify=True
+        ).to(self._device)
+
+        # Run image encoder to get the image embeddings
+        inputs_embeds = self._model.prepare_inputs_embeds(**prepare_inputs)
+
+        # Prepare generation kwargs
+        generate_kwargs = {
+            "inputs_embeds": inputs_embeds,
+            "attention_mask": prepare_inputs.attention_mask,
+            "pad_token_id": self._tokenizer.eos_token_id,
+            "bos_token_id": self._tokenizer.bos_token_id,
+            "eos_token_id": self._tokenizer.eos_token_id,
+            "max_new_tokens": max_new_tokens,
+            "use_cache": self.use_cache,
+        }
+
+        # Add sampling parameters
+        if temperature > 0:
+            generate_kwargs["do_sample"] = True
+            generate_kwargs["temperature"] = temperature
+            if top_p is not None:
+                generate_kwargs["top_p"] = top_p
+        else:
+            generate_kwargs["do_sample"] = False
+
+        if num_beams > 1:
+            generate_kwargs["num_beams"] = num_beams
+
+        # DEBUG LOG: Print before generation starts
+        print(f"[Debug] Starting generation... (Prep time: {time.time()-t0:.2f}s)")
+        
+        # Generate response
+        with torch.no_grad():
+            outputs = self._model.language_model.generate(**generate_kwargs)
+
+        # DEBUG LOG: Print after generation finishes
+        # print(f"[Debug] Generation done (Total time: {time.time()-t0:.2f}s)")
+
+        # Decode response
+        answer = self._tokenizer.decode(outputs[0].cpu().tolist(), skip_special_tokens=True)
+        
+        del outputs, inputs_embeds, prepare_inputs
+        return answer
 
     def generate_until_multi_round(self, requests) -> List[str]:
         """Generate for multi-round conversations (not implemented)."""

@@ -776,6 +776,234 @@ class OvisU1VisualCoT(lmms):
             "OvisU1VisualCoT is a generation model and does not support loglikelihood"
         )
 
+    def generate_uni_mmmu_interleaved(
+        self,
+        input_images: List,
+        prompt: str,
+        doc_id: str,
+        task: str,
+        interleaved_config: dict,
+        doc: dict = None,
+    ) -> Tuple[str, List[str]]:
+        """
+        Uni-MMMU interleaved generation for Ovis-U1 Visual CoT.
+
+        This implements the exact generation flow from the original Uni-MMMU:
+        - Jigsaw: gen_image(cand0) → gen_image(cand1) → gen_text(answer)
+        - Maze/Sliding: [gen_text(plan) → gen_image(step)]×k → gen_text(answer)
+
+        Args:
+            input_images: List of input images
+            prompt: Base prompt text
+            doc_id: Document ID for file naming
+            task: Task name for file naming
+            interleaved_config: Configuration dict from yaml
+            doc: Document data for dynamic num_images extraction
+
+        Returns:
+            Tuple of (final_text_answer, list_of_generated_image_paths)
+        """
+        import json as json_module
+
+        task_type = interleaved_config.get("task_type", "jigsaw")
+
+        # Get num_images dynamically from doc if available
+        num_images = interleaved_config.get("num_images", 2)
+        if doc is not None:
+            if task_type == "maze":
+                # Get step count from ground truth
+                steps_str = doc.get("steps", "[]")
+                steps = json_module.loads(steps_str) if isinstance(steps_str, str) else steps_str
+                if steps:
+                    num_images = len(steps)
+            elif task_type == "sliding":
+                # Get step count from ground truth
+                steps_str = doc.get("steps_words", "[]")
+                steps = json_module.loads(steps_str) if isinstance(steps_str, str) else steps_str
+                if steps:
+                    num_images = len(steps)
+
+        # Extract original image from input_images
+        original_image = None
+        if input_images and len(input_images) > 0:
+            original_image = self._extract_image_from_various_formats(input_images[0])
+
+        generated_images = []
+
+        # Create task-specific output directory
+        task_output_dir = os.path.join(self.generated_images_dir, task)
+        os.makedirs(task_output_dir, exist_ok=True)
+
+        if task_type == "jigsaw":
+            # Jigsaw: Generate 2 completed images then final answer
+            # Image 1: Candidate 0 completion
+            suffix1 = "Output ONLY a single image with Candidate 0 placed in the bottom-right cell. No text."
+            gen_prompt1 = prompt + "\n\n" + suffix1
+
+            _, img_paths_0 = self._stage1_generate_image(
+                generation_prompt=gen_prompt1,
+                question="",
+                doc_id=f"{doc_id}_cand0",
+                task=task,
+                original_image=original_image,
+            )
+            if img_paths_0:
+                generated_images.extend(img_paths_0)
+                eval_logger.info(f"Saved jigsaw image 0: {img_paths_0[0]}")
+
+            # Image 2: Candidate 1 completion
+            suffix2 = "Output ONLY a single image with Candidate 1 placed in the bottom-right cell. No text."
+            gen_prompt2 = prompt + "\n\n" + suffix2
+
+            _, img_paths_1 = self._stage1_generate_image(
+                generation_prompt=gen_prompt2,
+                question="",
+                doc_id=f"{doc_id}_cand1",
+                task=task,
+                original_image=original_image,
+            )
+            if img_paths_1:
+                generated_images.extend(img_paths_1)
+                eval_logger.info(f"Saved jigsaw image 1: {img_paths_1[0]}")
+
+            # Final answer using stage 2 with all generated images
+            final_suffix = (
+                'Now output EXACTLY ONE <FINAL_ANSWER_JSON>{"choice": 0 or 1, "rationale": "≤30 words"}</FINAL_ANSWER_JSON>\n'
+                "Do not output any additional images."
+            )
+
+            # Use stage 2 to answer with the generated images
+            if len(generated_images) >= 2:
+                # Load both generated images
+                img0 = Image.open(generated_images[0]).convert("RGB")
+                img1 = Image.open(generated_images[1]).convert("RGB")
+
+                # Build query with both images
+                images = []
+                if original_image:
+                    images.append(original_image)
+                images.extend([img0, img1])
+
+                # Build query text
+                query_text = prompt + "\n\n" + final_suffix
+                image_placeholder = "<image>" * len(images)
+                query = image_placeholder + "\n" + query_text
+
+                # Preprocess inputs
+                _, input_ids, pixel_values, grid_thws = self.model.preprocess_inputs(
+                    text_or_conversations=query,
+                    images=images,
+                )
+
+                # Move to device
+                input_ids = input_ids.unsqueeze(0).to(self._device)
+                attention_mask = torch.ones_like(input_ids)
+                if pixel_values is not None:
+                    pixel_values = pixel_values.to(device=self._device, dtype=self.model.dtype)
+                if grid_thws is not None:
+                    grid_thws = grid_thws.to(self._device)
+
+                # Generate final answer
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        inputs=input_ids,
+                        attention_mask=attention_mask,
+                        pixel_values=pixel_values,
+                        grid_thws=grid_thws,
+                        max_new_tokens=self.stage2_max_new_tokens,
+                        use_cache=self.use_cache,
+                        do_sample=False,
+                    )
+
+                final_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+                # Clean up
+                del outputs, input_ids, pixel_values, grid_thws
+                torch.cuda.empty_cache()
+            else:
+                final_text = ""
+
+        else:
+            # Maze/Sliding: [gen_text(plan) → gen_image(step)]×k → gen_text(answer)
+            for i in range(1, num_images + 1):
+                # Generate step image with planning prompt
+                if task_type == "maze":
+                    plan_suffix = f'Step {i}: Generate an image showing the next move (one step up/down/left/right).'
+                else:  # sliding
+                    plan_suffix = f'Step {i}: Generate an image showing which tile to move and in which direction.'
+
+                gen_prompt = prompt + "\n\n" + plan_suffix
+
+                _, img_paths = self._stage1_generate_image(
+                    generation_prompt=gen_prompt,
+                    question="",
+                    doc_id=f"{doc_id}_step_{i:04d}",
+                    task=task,
+                    original_image=original_image,
+                )
+
+                if img_paths:
+                    generated_images.extend(img_paths)
+                    eval_logger.info(f"Saved step {i} image: {img_paths[0]}")
+
+            # Final answer using all generated step images
+            final_suffix = (
+                "After the images, emit EXACTLY ONE LINE containing ONLY the final move list "
+                "as <ANSWER_JSON>[...]</ANSWER_JSON>. No other text."
+            )
+
+            # Use stage 2 to answer with all generated images
+            if generated_images:
+                # Load all generated images
+                step_images = [Image.open(img_path).convert("RGB") for img_path in generated_images]
+
+                # Build query with all images
+                images = []
+                if original_image:
+                    images.append(original_image)
+                images.extend(step_images)
+
+                # Build query text
+                query_text = prompt + "\n\n" + final_suffix
+                image_placeholder = "<image>" * len(images)
+                query = image_placeholder + "\n" + query_text
+
+                # Preprocess inputs
+                _, input_ids, pixel_values, grid_thws = self.model.preprocess_inputs(
+                    text_or_conversations=query,
+                    images=images,
+                )
+
+                # Move to device
+                input_ids = input_ids.unsqueeze(0).to(self._device)
+                attention_mask = torch.ones_like(input_ids)
+                if pixel_values is not None:
+                    pixel_values = pixel_values.to(device=self._device, dtype=self.model.dtype)
+                if grid_thws is not None:
+                    grid_thws = grid_thws.to(self._device)
+
+                # Generate final answer
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        inputs=input_ids,
+                        attention_mask=attention_mask,
+                        pixel_values=pixel_values,
+                        grid_thws=grid_thws,
+                        max_new_tokens=self.stage2_max_new_tokens,
+                        use_cache=self.use_cache,
+                        do_sample=False,
+                    )
+
+                final_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+                # Clean up
+                del outputs, input_ids, pixel_values, grid_thws
+                torch.cuda.empty_cache()
+            else:
+                final_text = ""
+
+        return final_text, generated_images
+
     def generate_until_multi_round(self, requests) -> List[str]:
         """Multi-round dialogue not yet implemented"""
         raise NotImplementedError(

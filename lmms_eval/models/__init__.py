@@ -32,6 +32,7 @@ AVAILABLE_SIMPLE_MODELS = {
     "gemma3": "Gemma3",
     "gpt4v": "GPT4V",
     "idefics2": "Idefics2",
+    "illume_plus": "ILLUMEPlus",
     "instructblip": "InstructBLIP",
     "internvideo2": "InternVideo2",
     "internvl": "InternVLChat",
@@ -97,6 +98,8 @@ AVAILABLE_SIMPLE_MODELS = {
     "videochat_flash": "VideoChat_Flash",
     "javisgpt": "JavisGPT",
     "javisgpt_visual_cot": "JavisGPTVisualCoT",
+    "janus_pro": "JanusPro",
+    "janus_pro_visual_cot": "JanusProVisualCoT",
     "onecat": "OneCAT",
     "onecat_visual_cot": "OneCATVisualCoT",
     "tokenflow" :"TokenFlow",
@@ -105,6 +108,7 @@ AVAILABLE_SIMPLE_MODELS = {
     "whisper_vllm": "WhisperVllm",
     "vora": "VoRA",
     "unipic2": "UniPic2",
+    "unipic2_visual_cot": "UniPic2VisualCoT",
 }
 
 AVAILABLE_CHAT_TEMPLATE_MODELS = {
