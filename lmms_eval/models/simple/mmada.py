@@ -330,7 +330,7 @@ class MMaDA(lmms):
             # For understanding tasks, use optimized step count
             # Balance between speed and quality
             gen_max_tokens = self.max_new_tokens
-            gen_steps = 16  # Optimized: 16 steps for good speed/quality balance
+            gen_steps = 64  # Increased to 64 steps for better quality on complex tasks
             gen_block_length = min(gen_max_tokens, 128)  # Reasonable block size
 
             with torch.no_grad():
@@ -533,7 +533,10 @@ class MMaDA(lmms):
                 image = visuals[0]
                 if isinstance(image, str):
                     image = Image.open(image).convert("RGB")
-                elif not isinstance(image, Image.Image):
+                elif isinstance(image, Image.Image):
+                    # Ensure image is in RGB mode (handle RGBA, L, etc.)
+                    image = image.convert("RGB")
+                else:
                     eval_logger.warning(
                         f"Unsupported visual type: {type(image)} for doc_id={doc_id}"
                     )
