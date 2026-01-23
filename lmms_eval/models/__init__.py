@@ -26,6 +26,7 @@ AVAILABLE_SIMPLE_MODELS = {
     "claude": "Claude",
     "cogvlm2": "CogVLM2",
     "from_log": "FromLog",
+    "fudoki": "FUDOKI",
     "fuyu": "Fuyu",
     "gemini_api": "GeminiAPI",
     "gpt4o_audio": "GPT4OAudio",
